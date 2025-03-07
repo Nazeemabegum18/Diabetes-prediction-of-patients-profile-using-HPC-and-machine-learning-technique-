@@ -1,0 +1,250 @@
+---
+title: "diabetes"
+author: "Nazeema"
+date: "2024-04-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+```{r}
+install.packages("stats")
+install.packages("dplyr")
+install.packages("ggplot2")
+install.packages("ggfortify")
+install.packages("cluster")
+install.packages("randomForest")
+install.packages("caret")
+
+```
+
+```{r}
+library(stats)
+library(dplyr)
+library(ggplot2)
+library(ggfortify)
+library(cluster)
+library(randomForest)
+library(caret)
+library(pROC)
+```
+
+### Data Preparation and Cleaning
+
+#### 1. load data
+```{r}
+#### 1.1 load the data from the diabetes_prediction.csv file and inspect it
+diabetes_dataset <- read.csv("diabetes_prediction.csv", na.strings = c("NA", ""))
+str(diabetes_dataset)
+```
+
+#### 2. handling missing values
+```{r}
+### 2.1 identify features with missing values
+###   having a look at the summary statistics of the dataset before cleaning
+summary(diabetes_dataset)
+
+### 2.2 calculate and inspect a table of the percentage of NA per feature
+diabetes_dataset_NA_count <- apply(is.na(diabetes_dataset),2,sum)
+diabetes_dataset_NA_perc <- diabetes_dataset_NA_count / dim(diabetes_dataset)[1] * 100
+diabetes_dataset_NA_perc
+
+### 2.3 Imputing missing values
+
+#### Impute missing age values by replacement with the median value
+median_age <- median(diabetes_dataset$age, na.rm = TRUE)
+diabetes_dataset$age[is.na(diabetes_dataset$age)] <- median_age
+
+#### Impute missing values for gender with mode value
+mode_gender <- names(sort(table(diabetes_dataset$gender), decreasing = TRUE))[1]
+diabetes_dataset$gender[is.na(diabetes_dataset$gender)] <- mode_gender
+
+#### Since hypertension and Heart_disease are binary categorical variables (0 or 1), you can impute missing values with the mode (most frequent value)
+mode_hypertension <- names(sort(table(diabetes_dataset$hypertension), decreasing = TRUE))[1]
+diabetes_dataset$hypertension[is.na(diabetes_dataset$hypertension)] <- as.numeric(mode_hypertension)
+
+mode_heart_disease <- names(sort(table(diabetes_dataset$heart_disease), decreasing = TRUE))[1] 
+diabetes_dataset$heart_disease[is.na(diabetes_dataset$heart_disease)] <- as.numeric(mode_heart_disease) 
+
+
+#### check to see the count of missing values in the categorical columns smoking history and diabetes 
+table(diabetes_dataset$smoking_history)
+table(diabetes_dataset$diabetes)
+ 
+#### analysis of the continuous variables bmi, HbA1c_level and blood_glucose_level
+colSums(is.na(diabetes_dataset))
+
+
+missing_bmi <- is.na(diabetes_dataset$bmi)
+median_bmi <- median(diabetes_dataset$bmi, na.rm = TRUE)
+diabetes_dataset$bmi[missing_bmi] <- median_bmi
+
+missing_HbA1c_level <- is.na(diabetes_dataset$HbA1c_level)
+median_HbA1c_level <- median(diabetes_dataset$HbA1c_level, na.rm = TRUE)
+diabetes_dataset$HbA1c_level[missing_HbA1c_level] <- median_HbA1c_level
+
+missing_blood_glucose_level <- is.na(diabetes_dataset$blood_glucose_level)
+median_blood_glucose_level <- median(diabetes_dataset$blood_glucose_level, na.rm = TRUE)
+diabetes_dataset$blood_glucose_level[missing_blood_glucose_level] <- median_blood_glucose_level
+```
+
+#### 3. summary statistics of the dataset after imputing missing values
+```{r}
+#### The summary statistics remains the same after imputing the missing values
+summary(diabetes_dataset)
+```
+
+
+#### 4. checking for outliers in the dataset
+```{r}
+#### Using boxplot to visualise the outliers for factors age, bmi, HbA1c_level and blood_glucose_level
+boxplot(diabetes_dataset$age, 
+        xlab = "age",
+        ylab = "age range",
+        main = "age of diabetes patients"
+        )
+
+boxplot(diabetes_dataset$bmi, 
+        xlab = "bmi",
+        ylab = "Bmi range",
+        main = "Bmi values of diabetes patients"
+        )
+
+boxplot(diabetes_dataset$HbA1c_level, 
+        xlab = "HbA1c_level",
+        ylab = "HbA1c_level range",
+        main = "HbA1c_level values of diabetes patients"
+        )
+
+boxplot(diabetes_dataset$blood_glucose_level, 
+        xlab = "blood_glucose_level",
+        ylab = "blood_glucose_level",
+        main = "blood_glucose_level values of diabetes patients"
+        )
+```
+
+
+### Exploratory Data Analysis
+#### 1. k-means Cluster Analysis
+```{r}
+#### converting the categorical variables to numeric to use them in clustering
+diabetes_dataset$gender <- is.numeric(diabetes_dataset$gender)
+diabetes_dataset$smoking_history <- is.numeric(diabetes_dataset$smoking_history)
+
+#### wssplot function is used to find the optimum number of clusters required
+wssplot <- function(data, nc=15, seed=1234){
+                  wss <- (nrow(data)-1)*sum(apply(data,2,var))
+                      for (i in 2:nc){
+                set.seed(seed)
+                    wss[i] <- sum(kmeans(data, centers=i)$withinss)}
+              plot(1:nc, wss, type="b", xlab="Number of Clusters",
+                            ylab="Within groups sum of squares")
+              wss
+       }
+```
+
+```{r}
+wssplot(diabetes_dataset)
+#dist_diabetes <- dist(diabetes_dataset[,1:8], method = 'euclidian')
+
+#### performing k-means clustering, excluding the diabetes column
+cluster_data = select(diabetes_dataset,c(1,2,3,4,5,6,7,8))
+k_diabetes = kmeans(cluster_data, 3)
+k_diabetes
+
+#### get the cluster id from the kmeans object
+k_cluster_id_diabetes <- k_diabetes$cluster
+```
+
+#### 2.Cluster plot
+```{r}
+autoplot(k_diabetes,cluster_data,frame=TRUE)
+```
+
+
+#### 3.Evaluating the cluster results
+```{r}
+#### calculating the attributes averages in each cluster
+diabetes_cl_1 <- apply(cluster_data[k_cluster_id_diabetes == 1,-1], 2, mean)
+diabetes_cl_2 <- apply(cluster_data[k_cluster_id_diabetes == 2,-1], 2, mean)
+diabetes_cl_3 <- apply(cluster_data[k_cluster_id_diabetes == 3,-1], 2, mean)
+
+diabetes_cluster_averages <- rbind(diabetes_cl_1, diabetes_cl_2, diabetes_cl_3)
+diabetes_cluster_averages
+```
+
+This shows that the centers of each cluster are distinct.
+
+All the observations in cluster 1 are having an approximate values of age=41.68, hypertension=0.037,heart_disease=0.037, bmi=27.3, HbA1c_level=5.5 and blood_glucose_level=146.48.
+
+All the observations in cluster 2 are having an approximate values of age=39.97, hypertension=0.0568,heart_disease=0.029, bmi=26.9, HbA1c_level=5.4 and blood_glucose_level=88.76.
+
+All the observations in cluster 3 are having an approximate values of age=47.8, hypertension=0.13, heart_disease=0.075, bmi=28.7, HbA1c_level=5.97 and blood_glucose_level=218.88.
+
+The patients under cluster 3 who are having age of arounnd 48 are having high blood_glucose_level, HbA1c_level, bmi and most of them in this cluster are having hypertension and heart_disease.
+
+```{r}
+str(diabetes_dataset)
+```
+
+##dealing with datatype
+```{r}
+colnames <- c('gender', 'hypertension', 'heart_disease', 'smoking_history', 'diabetes')
+```
+```{r}
+diabetes_dataset <- diabetes_dataset %>%
+  mutate(across(all_of(colnames), as.factor))
+
+file_path <- "D:/high performance/hpc/diabetes_Rf.csv"
+ 
+# Export the dataset to a CSV file
+write.csv(diabetes_dataset, file_path, row.names = FALSE)
+
+```
+##Random forest:
+```{r}
+set.seed(123)
+n_rows <- nrow(diabetes_dataset)
+training_index <- sample(n_rows, n_rows*0.7)
+training_diabetes <- diabetes_dataset[training_index,]
+test_diabetes <- diabetes_dataset[-training_index,]
+```
+
+```{r}
+rf_diabetes <- randomForest( diabetes~., data = training_diabetes, ntree = 500, mtry=sqrt(7))
+rf_diabetes
+```
+```{r}
+plot(rf_diabetes)
+```
+###evaluating model performace
+```{r}
+predictions = predict(rf_diabetes, test_diabetes, type = "response")
+head(predictions)
+```
+```{r}
+confusionmat1 = confusionMatrix(predictions, test_diabetes$diabetes, positive = '1')
+confusionmat1
+```
+```{r}
+str(diabetes_dataset)
+```
+```{r}
+rf_diabetic_pred <- predict(rf_diabetes, test_diabetes[,-9], type = "class")
+rf_diabetes_table <- table(rf = rf_diabetic_pred, actual = test_diabetes$diabetes)
+rf_diabetes_table
+```
+```{r}
+acc_rf <- sum(diag(rf_diabetes_table)) / sum(rf_diabetes_table)
+acc_rf
+
+```
